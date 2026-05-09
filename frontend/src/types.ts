@@ -18,8 +18,10 @@ export interface MessageRecord {
 export interface SettingsResponse {
   server_url?: string | null;
   username?: string | null;
+  password?: string | null;
   device_id?: string | null;
   webhook_public_url?: string | null;
+  webhook_signing_key?: string | null;
   messages_retention_days: number;
   has_password: boolean;
   has_webhook_signing_key: boolean;

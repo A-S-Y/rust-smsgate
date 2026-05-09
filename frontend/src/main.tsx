@@ -438,8 +438,10 @@ function Settings({
       setForm({
         server_url: data.server_url || "https://api.sms-gate.app",
         username: data.username || "",
+        password: data.password || "",
         device_id: data.device_id || "",
         webhook_public_url: data.webhook_public_url || "",
+        webhook_signing_key: data.webhook_signing_key || "",
         messages_retention_days: String(data.messages_retention_days || 30),
       });
     });
@@ -477,7 +479,7 @@ function Settings({
           <label key={key}>{labelFor(key)}
             <input
               dir="ltr"
-              type={key.includes("password") || key.includes("key") ? "password" : key === "messages_retention_days" ? "number" : "text"}
+              type={key === "messages_retention_days" ? "number" : "text"}
               min={key === "messages_retention_days" ? 1 : undefined}
               max={key === "messages_retention_days" ? 3650 : undefined}
               value={form[key] || ""}

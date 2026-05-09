@@ -16,8 +16,10 @@ pub async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> 
     let response = SettingsResponse {
         server_url: get_setting(&state, &crypto, "server_url").await?,
         username: get_setting(&state, &crypto, "username").await?,
+        password: get_setting(&state, &crypto, "password").await?,
         device_id: get_setting(&state, &crypto, "device_id").await?,
         webhook_public_url: get_setting(&state, &crypto, "webhook_public_url").await?,
+        webhook_signing_key: get_setting(&state, &crypto, "webhook_signing_key").await?,
         messages_retention_days: get_setting(&state, &crypto, "messages_retention_days")
             .await?
             .and_then(|value| value.parse::<i64>().ok())
@@ -36,6 +38,11 @@ pub async fn save_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     let actor = require_auth(&headers, &state.config)?;
     let crypto = CryptoBox::new(&state.config.settings_encryption_key);
+    let password_saved = input.password.as_ref().is_some_and(|value| !value.is_empty());
+    let webhook_signing_key_saved = input
+        .webhook_signing_key
+        .as_ref()
+        .is_some_and(|value| !value.is_empty());
 
     save_plain(&state, "server_url", input.server_url).await?;
     save_plain(&state, "username", input.username).await?;
@@ -53,7 +60,21 @@ pub async fn save_settings(
     sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
         .bind(actor)
         .bind("settings.updated")
-        .bind(json!({ "keys": ["server_url", "username", "device_id", "webhook_public_url"] }))
+        .bind(json!({
+            "keys": [
+                "server_url",
+                "username",
+                "password",
+                "device_id",
+                "webhook_public_url",
+                "webhook_signing_key",
+                "messages_retention_days"
+            ],
+            "secrets_saved": {
+                "password": password_saved,
+                "webhook_signing_key": webhook_signing_key_saved
+            }
+        }))
         .execute(&state.db)
         .await?;
 

@@ -37,8 +37,10 @@ pub struct LoginResponse {
 pub struct SettingsResponse {
     pub server_url: Option<String>,
     pub username: Option<String>,
+    pub password: Option<String>,
     pub device_id: Option<String>,
     pub webhook_public_url: Option<String>,
+    pub webhook_signing_key: Option<String>,
     pub messages_retention_days: i64,
     pub has_password: bool,
     pub has_webhook_signing_key: bool,
