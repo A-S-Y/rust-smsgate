@@ -29,7 +29,7 @@ server {
     }
 
     location / {
-        root /var/www/rust-smsgate/frontend/dist;
+        root /opt/rust-smsgate/frontend/dist;
         try_files $uri $uri/ /index.html;
     }
 }

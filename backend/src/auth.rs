@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{app_error::{AppError, AppResult}, config::Config};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Claims {
     sub: String,
     exp: usize,

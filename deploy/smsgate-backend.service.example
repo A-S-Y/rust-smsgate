@@ -5,7 +5,7 @@ After=network.target postgresql.service
 [Service]
 WorkingDirectory=/opt/rust-smsgate/backend
 EnvironmentFile=/opt/rust-smsgate/.env
-ExecStart=/opt/rust-smsgate/backend/smsgate-backend
+ExecStart=/opt/rust-smsgate/backend/target/release/smsgate-backend
 Restart=always
 RestartSec=5
 User=www-data
