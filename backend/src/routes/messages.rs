@@ -59,13 +59,18 @@ pub async fn send_message(
     let actor = require_auth(&headers, &state.config)?;
     let crypto = CryptoBox::new(&state.config.settings_encryption_key);
     let device_id = get_setting(&state, &crypto, "device_id").await?;
+    let normalized_phone = normalize_phone_number(&input.phone_number);
+    let normalized_input = SendMessageRequest {
+        phone_number: normalized_phone.clone(),
+        message_content: input.message_content.clone(),
+    };
 
     let message = sqlx::query_as::<_, Message>(
         "INSERT INTO messages(direction, status, phone_number, message_content, recipient, device_id)
          VALUES ('sent', 'Queued', $1, $2, $1, $3)
          RETURNING *",
     )
-    .bind(&input.phone_number)
+    .bind(&normalized_phone)
     .bind(&input.message_content)
     .bind(&device_id)
     .fetch_one(&state.db)
@@ -86,7 +91,7 @@ pub async fn send_message(
     let queued = message.clone();
     let state_for_send = state.clone();
     tokio::spawn(async move {
-        if let Err(error) = deliver_outgoing_message(state_for_send, queued.id, input).await {
+        if let Err(error) = deliver_outgoing_message(state_for_send, queued.id, normalized_input).await {
             eprintln!("failed to deliver outgoing SMS: {error}");
         }
     });
@@ -313,4 +318,48 @@ async fn mark_message_failed(state: &AppState, id: uuid::Uuid, raw_payload: Valu
         .fetch_one(&state.db)
         .await?;
     Ok(message)
+}
+
+fn normalize_phone_number(value: &str) -> String {
+    let compact: String = value
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_digit() || *ch == '+')
+        .collect();
+
+    if compact.starts_with('+') {
+        return compact;
+    }
+
+    if let Some(rest) = compact.strip_prefix("00") {
+        return format!("+{rest}");
+    }
+
+    if compact.starts_with("967") {
+        return format!("+{compact}");
+    }
+
+    if compact.starts_with("07") && compact.len() == 10 {
+        return format!("+967{}", compact.trim_start_matches('0'));
+    }
+
+    if compact.starts_with('7') && compact.len() == 9 {
+        return format!("+967{compact}");
+    }
+
+    compact
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_phone_number;
+
+    #[test]
+    fn normalizes_yemeni_mobile_numbers() {
+        assert_eq!(normalize_phone_number("783285859"), "+967783285859");
+        assert_eq!(normalize_phone_number("0783285859"), "+967783285859");
+        assert_eq!(normalize_phone_number("967783285859"), "+967783285859");
+        assert_eq!(normalize_phone_number("00967783285859"), "+967783285859");
+        assert_eq!(normalize_phone_number("+967783285859"), "+967783285859");
+    }
 }

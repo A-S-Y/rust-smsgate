@@ -600,7 +600,14 @@ function counterpart(message: MessageRecord) {
 }
 
 function normalizePhone(value: string) {
-  return value.trim() || "Unknown";
+  const compact = value.trim().replace(/[^\d+]/g, "");
+  if (!compact) return "Unknown";
+  if (compact.startsWith("+")) return compact;
+  if (compact.startsWith("00")) return `+${compact.slice(2)}`;
+  if (compact.startsWith("967")) return `+${compact}`;
+  if (compact.startsWith("07") && compact.length === 10) return `+967${compact.slice(1)}`;
+  if (compact.startsWith("7") && compact.length === 9) return `+967${compact}`;
+  return compact;
 }
 
 function timestamp(message: MessageRecord) {
