@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod diagnostics;
 pub mod health;
 pub mod messages;
 pub mod settings;
@@ -16,6 +17,7 @@ pub fn api_router() -> Router<AppState> {
     Router::new()
         .route("/api/auth/login", post(auth::login))
         .route("/api/settings", get(settings::get_settings).post(settings::save_settings))
+        .route("/api/diagnostics/sync-log", get(diagnostics::sync_log))
         .route("/api/messages", get(messages::list_messages))
         .route("/api/messages/send", post(messages::send_message))
         .route("/api/messages/import-inbox", post(messages::import_inbox))

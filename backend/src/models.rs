@@ -55,7 +55,7 @@ pub struct SettingsRequest {
     pub messages_retention_days: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct SendMessageRequest {
     pub phone_number: String,
     pub message_content: String,

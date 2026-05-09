@@ -25,6 +25,39 @@ export interface SettingsResponse {
   has_webhook_signing_key: boolean;
 }
 
+export interface SyncLogResponse {
+  summary: {
+    sent_messages: number;
+    received_messages: number;
+    recent_webhooks: number;
+    recent_audit_logs: number;
+  };
+  recent_webhooks: Array<{
+    event_id: string;
+    event: string;
+    device_id?: string | null;
+    webhook_id?: string | null;
+    received_at: string;
+    payload: unknown;
+  }>;
+  recent_audit_logs: Array<{
+    actor?: string | null;
+    action: string;
+    metadata?: unknown;
+    created_at: string;
+  }>;
+  recent_outgoing_messages: Array<{
+    id: string;
+    status: string;
+    phone_number: string;
+    message_id?: string | null;
+    webhook_event_id?: string | null;
+    created_at: string;
+    updated_at: string;
+    raw_payload?: unknown;
+  }>;
+}
+
 export type RealtimeEvent =
   | { type: "message.created"; payload: MessageRecord }
   | { type: "message.updated"; payload: MessageRecord }

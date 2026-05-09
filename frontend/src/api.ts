@@ -1,4 +1,4 @@
-import type { MessageRecord, SettingsResponse } from "./types";
+import type { MessageRecord, SettingsResponse, SyncLogResponse } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -32,6 +32,7 @@ export const api = {
     }),
   messages: (token: string) => request<MessageRecord[]>("/messages?limit=500", token),
   settings: (token: string) => request<SettingsResponse>("/settings", token),
+  syncLog: (token: string) => request<SyncLogResponse>("/diagnostics/sync-log", token),
   saveSettings: (token: string, payload: Record<string, string>) =>
     request<{ message: string }>("/settings", token, {
       method: "POST",

@@ -1,6 +1,7 @@
 use axum::{extract::{Query, State}, http::HeaderMap, Json};
 use chrono::{Duration, Utc};
 use serde_json::{json, Value};
+use uuid::Uuid;
 
 use crate::{
     app_error::{AppError, AppResult},
@@ -55,12 +56,12 @@ pub async fn send_message(
     headers: HeaderMap,
     Json(input): Json<SendMessageRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
-    require_auth(&headers, &state.config)?;
+    let actor = require_auth(&headers, &state.config)?;
     let sms = sms_settings(&state).await?;
 
     let message = sqlx::query_as::<_, Message>(
         "INSERT INTO messages(direction, status, phone_number, message_content, recipient, device_id)
-         VALUES ('sent', 'Pending', $1, $2, $1, $3)
+         VALUES ('sent', 'Queued', $1, $2, $1, $3)
          RETURNING *",
     )
     .bind(&input.phone_number)
@@ -70,7 +71,34 @@ pub async fn send_message(
     .await?;
 
     let _ = state.realtime.send(RealtimeEvent::MessageCreated(message.clone()));
+    sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+        .bind(actor)
+        .bind("messages.send.queued")
+        .bind(json!({
+            "message_id": message.id,
+            "phone_number": message.phone_number.clone(),
+            "status": message.status.clone()
+        }))
+        .execute(&state.db)
+        .await?;
 
+    let queued = message.clone();
+    let state_for_send = state.clone();
+    tokio::spawn(async move {
+        if let Err(error) = deliver_outgoing_message(state_for_send, queued.id, input).await {
+            eprintln!("failed to deliver outgoing SMS: {error}");
+        }
+    });
+
+    Ok(Json(json!({ "message": "Message queued locally.", "data": message })))
+}
+
+async fn deliver_outgoing_message(
+    state: AppState,
+    message_id: Uuid,
+    input: SendMessageRequest,
+) -> AppResult<()> {
+    let sms = sms_settings(&state).await?;
     let mut body = json!({
         "textMessage": { "text": input.message_content },
         "phoneNumbers": [input.phone_number],
@@ -79,18 +107,53 @@ pub async fn send_message(
         body["deviceId"] = json!(device_id);
     }
 
-    let res = state
+    let res = match state
         .http
         .post(format!("{}/3rdparty/v1/messages", sms.server_url.trim_end_matches('/')))
         .basic_auth(sms.username, Some(sms.password))
         .json(&body)
         .send()
-        .await?;
+        .await
+    {
+        Ok(res) => res,
+        Err(error) => {
+            let failed = mark_message_failed(
+                &state,
+                message_id,
+                json!({ "error": error.to_string(), "stage": "request" }),
+            )
+            .await?;
+            sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+                .bind("system")
+                .bind("messages.send.failed")
+                .bind(json!({
+                    "message_id": failed.id,
+                    "phone_number": failed.phone_number.clone(),
+                    "error": error.to_string(),
+                    "stage": "request"
+                }))
+                .execute(&state.db)
+                .await?;
+            let _ = state.realtime.send(RealtimeEvent::MessageUpdated(failed));
+            return Err(AppError::Upstream(format!("SMSGate send request failed: {error}")));
+        }
+    };
 
     let status = res.status();
     let upstream: Value = res.json().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
-        let failed = mark_message_failed(&state, message.id, upstream.clone()).await?;
+        let failed = mark_message_failed(&state, message_id, upstream.clone()).await?;
+        sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+            .bind("system")
+            .bind("messages.send.failed")
+            .bind(json!({
+                "message_id": failed.id,
+                "phone_number": failed.phone_number.clone(),
+                "upstream_status": status.as_u16(),
+                "upstream": upstream
+            }))
+            .execute(&state.db)
+            .await?;
         let _ = state.realtime.send(RealtimeEvent::MessageUpdated(failed.clone()));
         return Err(AppError::Upstream(format!("SMSGate send failed with status {status}")));
     }
@@ -107,14 +170,25 @@ pub async fn send_message(
          WHERE id = $1
          RETURNING *",
     )
-    .bind(message.id)
+    .bind(message_id)
     .bind(external_id)
     .bind(upstream)
     .fetch_one(&state.db)
     .await?;
 
     let _ = state.realtime.send(RealtimeEvent::MessageUpdated(updated.clone()));
-    Ok(Json(json!({ "message": "Message queued successfully.", "data": updated })))
+    sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+        .bind("system")
+        .bind("messages.send.accepted")
+        .bind(json!({
+            "message_id": updated.id,
+            "phone_number": updated.phone_number.clone(),
+            "external_message_id": updated.message_id.clone(),
+            "upstream": updated.raw_payload.clone()
+        }))
+        .execute(&state.db)
+        .await?;
+    Ok(())
 }
 
 pub async fn import_inbox(
@@ -122,7 +196,7 @@ pub async fn import_inbox(
     headers: HeaderMap,
     Json(input): Json<ImportInboxRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
-    require_auth(&headers, &state.config)?;
+    let actor = require_auth(&headers, &state.config)?;
     if input.until < input.since {
         return Err(AppError::BadRequest("until must be after since.".into()));
     }
@@ -150,12 +224,32 @@ pub async fn import_inbox(
     let status = res.status();
     let body: Value = res.json().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
+        sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+            .bind("system")
+            .bind("messages.import.failed")
+            .bind(json!({
+                "upstream_status": status.as_u16(),
+                "upstream": body
+            }))
+            .execute(&state.db)
+            .await?;
         return Err(AppError::Upstream(format!("SMSGate inbox export failed with status {status}")));
     }
 
+    sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+        .bind(actor)
+        .bind("messages.import.requested")
+        .bind(json!({
+            "device_id": device_id,
+            "since": input.since,
+            "until": input.until,
+            "upstream": body
+        }))
+        .execute(&state.db)
+        .await?;
+
     Ok(Json(json!({
         "message": "Inbox export request accepted. Messages will arrive through WebSocket after webhooks are delivered.",
-        "data": body,
         "requested_at": Utc::now(),
     })))
 }

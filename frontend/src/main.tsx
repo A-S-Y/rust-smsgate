@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, wsUrl } from "./api";
-import type { MessageRecord, RealtimeEvent, SettingsResponse } from "./types";
+import type { MessageRecord, RealtimeEvent, SettingsResponse, SyncLogResponse } from "./types";
 import "./styles.css";
 
 const tokenKey = "rust-smsgate-token";
@@ -180,7 +180,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           <Metric label="الصادر" value={stats.sent} />
         </section>
         {view === "messages" && <Conversations token={token} messages={messages} setNotice={setNotice} onMessageSaved={upsertMessage} />}
-        {view === "send" && <Send token={token} setNotice={setNotice} onMessageSaved={upsertMessage} />}
+        {view === "send" && <Send token={token} setNotice={setNotice} onMessageSaved={upsertMessage} onSent={() => setView("messages")} />}
         {view === "settings" && <Settings token={token} setNotice={setNotice} onSaved={reloadMessages} />}
       </main>
     </div>
@@ -379,10 +379,12 @@ function Send({
   token,
   setNotice,
   onMessageSaved,
+  onSent,
 }: {
   token: string;
   setNotice: (value: string | null) => void;
   onMessageSaved: (message: MessageRecord) => void;
+  onSent: () => void;
 }) {
   const [phone, setPhone] = useState("");
   const [text, setText] = useState("");
@@ -394,6 +396,7 @@ function Send({
     setNotice(res.message);
     setPhone("");
     setText("");
+    onSent();
   }
 
   return (
@@ -418,6 +421,7 @@ function Settings({
   onSaved: () => Promise<void>;
 }) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [syncLog, setSyncLog] = useState<SyncLogResponse | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [range, setRange] = useState(() => ({
     since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
@@ -435,7 +439,13 @@ function Settings({
         messages_retention_days: String(data.messages_retention_days || 30),
       });
     });
+    loadSyncLog().catch((err) => setNotice(err instanceof Error ? err.message : "فشل تحميل السجل"));
   }, [token]);
+
+  async function loadSyncLog() {
+    const data = await api.syncLog(token);
+    setSyncLog(data);
+  }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
@@ -480,7 +490,77 @@ function Settings({
         <input dir="ltr" value={range.until} onChange={(e) => setRange((prev) => ({ ...prev, until: e.target.value }))} />
         <button onClick={importInbox}>طلب الاستيراد</button>
       </div>
+      <SyncLogPanel
+        syncLog={syncLog}
+        onRefresh={() => loadSyncLog().catch((err) => setNotice(err instanceof Error ? err.message : "فشل تحديث السجل"))}
+      />
     </section>
+  );
+}
+
+function SyncLogPanel({
+  syncLog,
+  onRefresh,
+}: {
+  syncLog: SyncLogResponse | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <div className="sync-log">
+      <div className="sync-log-head">
+        <div>
+          <h2>سجل المزامنة والتشخيص</h2>
+          <p>آخر Webhooks وعمليات الإرسال والاستيراد لتتبع سبب عدم ظهور الرسائل.</p>
+        </div>
+        <button type="button" onClick={onRefresh}>تحديث</button>
+      </div>
+
+      {!syncLog && <div className="empty small">جاري تحميل السجل...</div>}
+      {syncLog && (
+        <>
+          <div className="sync-summary">
+            <Metric label="الصادر" value={syncLog.summary.sent_messages} />
+            <Metric label="الوارد" value={syncLog.summary.received_messages} />
+            <Metric label="Webhooks" value={syncLog.summary.recent_webhooks} />
+          </div>
+
+          <h3>آخر الرسائل الصادرة</h3>
+          <div className="log-list">
+            {syncLog.recent_outgoing_messages.map((item) => (
+              <div className="log-row" key={item.id}>
+                <div><b dir="ltr">{item.phone_number}</b><span>{item.status}</span></div>
+                <p dir="ltr">messageId: {item.message_id || "not set"} | webhook: {item.webhook_event_id || "not set"}</p>
+                <time>{new Date(item.updated_at).toLocaleString()}</time>
+              </div>
+            ))}
+            {syncLog.recent_outgoing_messages.length === 0 && <div className="empty small">لا توجد رسائل صادرة محفوظة في قاعدة البيانات.</div>}
+          </div>
+
+          <h3>آخر Webhooks</h3>
+          <div className="log-list">
+            {syncLog.recent_webhooks.map((item) => (
+              <div className="log-row" key={item.event_id}>
+                <div><b>{item.event}</b><span dir="ltr">{item.device_id || "no device"}</span></div>
+                <p dir="ltr">{item.event_id}</p>
+                <time>{new Date(item.received_at).toLocaleString()}</time>
+              </div>
+            ))}
+            {syncLog.recent_webhooks.length === 0 && <div className="empty small">لم يصل أي Webhook بعد.</div>}
+          </div>
+
+          <h3>آخر أحداث النظام</h3>
+          <div className="log-list">
+            {syncLog.recent_audit_logs.map((item, index) => (
+              <div className="log-row" key={`${item.action}-${item.created_at}-${index}`}>
+                <div><b>{item.action}</b><span>{item.actor || "system"}</span></div>
+                <p dir="ltr">{summarizeLogMetadata(item.metadata)}</p>
+                <time>{new Date(item.created_at).toLocaleString()}</time>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -547,6 +627,12 @@ function formatDateGroup(message: MessageRecord) {
     month: "long",
     day: "numeric",
   });
+}
+
+function summarizeLogMetadata(metadata: unknown) {
+  if (!metadata) return "no metadata";
+  const text = JSON.stringify(metadata);
+  return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
 function labelFor(key: string) {
