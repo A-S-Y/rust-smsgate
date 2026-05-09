@@ -1,10 +1,20 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { api, wsUrl } from "./api";
 import type { MessageRecord, RealtimeEvent, SettingsResponse } from "./types";
 import "./styles.css";
 
 const tokenKey = "rust-smsgate-token";
+
+interface Conversation {
+  id: string;
+  phone: string;
+  title: string;
+  messages: MessageRecord[];
+  lastMessage: MessageRecord;
+  receivedCount: number;
+  sentCount: number;
+}
 
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem(tokenKey));
@@ -15,10 +25,12 @@ function App() {
     }
   }, []);
 
-  if (!token) return <Login onLogin={(next) => {
-    localStorage.setItem(tokenKey, next);
-    setToken(next);
-  }} />;
+  if (!token) {
+    return <Login onLogin={(next) => {
+      localStorage.setItem(tokenKey, next);
+      setToken(next);
+    }} />;
+  }
 
   return <Dashboard token={token} onLogout={() => {
     localStorage.removeItem(tokenKey);
@@ -70,7 +82,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
   }), [messages]);
 
   useEffect(() => {
-    api.messages(token).then(setMessages).catch((err) => setNotice(err.message));
+    api.messages(token).then((data) => setMessages(sortMessages(data))).catch((err) => setNotice(err.message));
   }, [token]);
 
   useEffect(() => {
@@ -90,10 +102,10 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
       socket.onmessage = (event) => {
         const realtime = JSON.parse(event.data) as RealtimeEvent;
         if (realtime.type === "message.created") {
-          setMessages((prev) => [realtime.payload, ...prev.filter((m) => m.id !== realtime.payload.id)]);
+          setMessages((prev) => sortMessages([realtime.payload, ...prev.filter((m) => m.id !== realtime.payload.id)]));
         }
         if (realtime.type === "message.updated") {
-          setMessages((prev) => prev.map((m) => (m.id === realtime.payload.id ? realtime.payload : m)));
+          setMessages((prev) => sortMessages(prev.map((m) => (m.id === realtime.payload.id ? realtime.payload : m))));
         }
       };
     };
@@ -115,7 +127,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           <span className={`connection ${connection}`}>{connection === "online" ? "متصل لحظياً" : connection === "connecting" ? "جاري الاتصال" : "غير متصل"}</span>
         </div>
         <nav>
-          <button className={view === "messages" ? "active" : ""} onClick={() => setView("messages")}>الرسائل</button>
+          <button className={view === "messages" ? "active" : ""} onClick={() => setView("messages")}>المحادثات</button>
           <button className={view === "send" ? "active" : ""} onClick={() => setView("send")}>إرسال</button>
           <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>الإعدادات</button>
           <button onClick={onLogout}>خروج</button>
@@ -129,7 +141,7 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           <Metric label="الوارد" value={stats.received} />
           <Metric label="الصادر" value={stats.sent} />
         </section>
-        {view === "messages" && <Messages messages={messages} />}
+        {view === "messages" && <Conversations token={token} messages={messages} setNotice={setNotice} />}
         {view === "send" && <Send token={token} setNotice={setNotice} />}
         {view === "settings" && <Settings token={token} setNotice={setNotice} />}
       </main>
@@ -141,25 +153,147 @@ function Metric({ label, value }: { label: string; value: number }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function Messages({ messages }: { messages: MessageRecord[] }) {
+function Conversations({ token, messages, setNotice }: { token: string; messages: MessageRecord[]; setNotice: (value: string | null) => void }) {
+  const conversations = useMemo(() => buildConversations(messages), [messages]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    if (!selectedId && conversations.length > 0) setSelectedId(conversations[0].id);
+    if (selectedId && conversations.length > 0 && !conversations.some((conversation) => conversation.id === selectedId)) {
+      setSelectedId(conversations[0].id);
+    }
+  }, [conversations, selectedId]);
+
+  const filtered = conversations.filter((conversation) => {
+    const text = `${conversation.title} ${conversation.phone} ${conversation.lastMessage.message_content}`.toLowerCase();
+    return text.includes(query.trim().toLowerCase());
+  });
+  const selected = conversations.find((conversation) => conversation.id === selectedId) || filtered[0] || null;
+
   return (
-    <section className="panel">
-      <div className="panel-head"><h1>الرسائل اللحظية</h1><p>تظهر الرسائل فور وصول Webhook بدون polling.</p></div>
-      <div className="message-list">
-        {messages.map((message) => (
-          <article key={message.id} className={`message-row ${message.direction}`}>
-            <div>
-              <span className="pill">{message.direction === "received" ? "وارد" : "صادر"}</span>
-              <b dir="ltr">{message.direction === "received" ? message.sender || message.phone_number : message.recipient || message.phone_number}</b>
-            </div>
-            <p>{message.message_content}</p>
-            <footer><span>{message.status}</span><span>{new Date(message.received_at || message.created_at).toLocaleString()}</span></footer>
-          </article>
-        ))}
-        {messages.length === 0 && <div className="empty">لا توجد رسائل بعد.</div>}
-      </div>
+    <section className="conversation-shell">
+      <aside className="conversation-list">
+        <div className="conversation-list-head">
+          <div>
+            <h1>المحادثات</h1>
+            <p>{conversations.length} محادثة نشطة</p>
+          </div>
+          <span className="live-dot">مباشر</span>
+        </div>
+        <input className="conversation-search" placeholder="بحث بالرقم أو نص الرسالة" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <div className="conversation-items">
+          {filtered.map((conversation) => (
+            <button key={conversation.id} className={`conversation-item ${selected?.id === conversation.id ? "active" : ""}`} onClick={() => setSelectedId(conversation.id)}>
+              <Avatar value={conversation.title} />
+              <div className="conversation-summary">
+                <div>
+                  <b dir="ltr">{conversation.title}</b>
+                  <time>{formatConversationTime(conversation.lastMessage)}</time>
+                </div>
+                <p>{conversation.lastMessage.direction === "sent" ? "أنت: " : ""}{conversation.lastMessage.message_content}</p>
+                <span>{conversation.messages.length} رسالة</span>
+              </div>
+            </button>
+          ))}
+          {filtered.length === 0 && <div className="empty small">لا توجد محادثات مطابقة.</div>}
+        </div>
+      </aside>
+
+      <ConversationThread token={token} conversation={selected} setNotice={setNotice} />
     </section>
   );
+}
+
+function ConversationThread({ token, conversation, setNotice }: { token: string; conversation: Conversation | null; setNotice: (value: string | null) => void }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [conversation?.id, conversation?.messages.length]);
+
+  if (!conversation) {
+    return <div className="thread empty-thread"><div className="empty">اختر محادثة لعرض الرسائل والرد عليها.</div></div>;
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    const message = text.trim();
+    if (!message || sending || !conversation) return;
+
+    setSending(true);
+    setNotice(null);
+    try {
+      const res = await api.sendMessage(token, conversation.phone, message);
+      setNotice(res.message);
+      setText("");
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "فشل إرسال الرد");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="thread">
+      <header className="thread-header">
+        <Avatar value={conversation.title} />
+        <div>
+          <h2 dir="ltr">{conversation.title}</h2>
+          <p>{conversation.receivedCount} وارد · {conversation.sentCount} صادر · {conversation.phone}</p>
+        </div>
+      </header>
+
+      <div className="thread-body">
+        {conversation.messages.map((message, index) => {
+          const previous = conversation.messages[index - 1];
+          const showDate = !previous || dateKey(previous) !== dateKey(message);
+          return (
+            <React.Fragment key={message.id}>
+              {showDate && <div className="date-divider">{formatDateGroup(message)}</div>}
+              <MessageBubble message={message} />
+            </React.Fragment>
+          );
+        })}
+        <div ref={bottomRef} />
+      </div>
+
+      <form className="reply-bar" onSubmit={submit}>
+        <textarea
+          placeholder={`اكتب رداً إلى ${conversation.title}`}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          rows={1}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
+        <button disabled={sending || !text.trim()}>{sending ? "..." : "إرسال"}</button>
+      </form>
+    </div>
+  );
+}
+
+function MessageBubble({ message }: { message: MessageRecord }) {
+  const outgoing = message.direction === "sent";
+  return (
+    <div className={`bubble-row ${outgoing ? "outgoing" : "incoming"}`}>
+      <div className="bubble">
+        <p>{message.message_content}</p>
+        <footer><span>{message.status}</span><time>{formatTime(message)}</time></footer>
+      </div>
+    </div>
+  );
+}
+
+function Avatar({ value }: { value: string }) {
+  const label = value.replace(/[^\dA-Za-z\u0600-\u06FF]/g, "").slice(-2) || "؟";
+  return <span className="avatar">{label}</span>;
 }
 
 function Send({ token, setNotice }: { token: string; setNotice: (value: string | null) => void }) {
@@ -239,9 +373,7 @@ function Settings({ token, setNotice }: { token: string; setNotice: (value: stri
         ))}
         <button>حفظ الإعدادات</button>
       </form>
-      <div className="actions">
-        <button onClick={registerWebhook}>تسجيل Webhook</button>
-      </div>
+      <div className="actions"><button onClick={registerWebhook}>تسجيل Webhook</button></div>
       <div className="import-box">
         <h2>استيراد الرسائل السابقة</h2>
         <input dir="ltr" value={range.since} onChange={(e) => setRange((prev) => ({ ...prev, since: e.target.value }))} />
@@ -250,6 +382,71 @@ function Settings({ token, setNotice }: { token: string; setNotice: (value: stri
       </div>
     </section>
   );
+}
+
+function buildConversations(messages: MessageRecord[]): Conversation[] {
+  const groups = new Map<string, MessageRecord[]>();
+  for (const message of messages) {
+    const phone = normalizePhone(counterpart(message));
+    if (!groups.has(phone)) groups.set(phone, []);
+    groups.get(phone)!.push(message);
+  }
+
+  return Array.from(groups.entries())
+    .map(([phone, group]) => {
+      const sorted = [...group].sort((a, b) => timestamp(a) - timestamp(b));
+      const lastMessage = sorted[sorted.length - 1];
+      return {
+        id: phone,
+        phone,
+        title: phone,
+        messages: sorted,
+        lastMessage,
+        receivedCount: sorted.filter((message) => message.direction === "received").length,
+        sentCount: sorted.filter((message) => message.direction === "sent").length,
+      };
+    })
+    .sort((a, b) => timestamp(b.lastMessage) - timestamp(a.lastMessage));
+}
+
+function counterpart(message: MessageRecord) {
+  return message.direction === "received" ? message.sender || message.phone_number : message.recipient || message.phone_number;
+}
+
+function normalizePhone(value: string) {
+  return value.trim() || "Unknown";
+}
+
+function timestamp(message: MessageRecord) {
+  return new Date(message.received_at || message.created_at).getTime();
+}
+
+function sortMessages(messages: MessageRecord[]) {
+  return [...messages].sort((a, b) => timestamp(b) - timestamp(a));
+}
+
+function formatTime(message: MessageRecord) {
+  return new Date(message.received_at || message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatConversationTime(message: MessageRecord) {
+  const date = new Date(message.received_at || message.created_at);
+  const now = new Date();
+  if (date.toDateString() === now.toDateString()) return formatTime(message);
+  return date.toLocaleDateString();
+}
+
+function dateKey(message: MessageRecord) {
+  return new Date(message.received_at || message.created_at).toDateString();
+}
+
+function formatDateGroup(message: MessageRecord) {
+  return new Date(message.received_at || message.created_at).toLocaleDateString(undefined, {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
 }
 
 function labelFor(key: string) {

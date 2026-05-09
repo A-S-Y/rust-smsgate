@@ -1,9 +1,12 @@
 import type { SettingsResponse } from "./types";
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8080/api";
+export const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
 export function wsUrl(token: string) {
-  const url = new URL(API_BASE.replace(/^http/, "ws") + "/ws");
+  const apiUrl = new URL(API_BASE, window.location.origin);
+  apiUrl.protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+  apiUrl.pathname = `${apiUrl.pathname.replace(/\/$/, "")}/ws`;
+  const url = apiUrl;
   url.searchParams.set("token", token);
   return url.toString();
 }
