@@ -54,7 +54,7 @@ pub async fn smsgate_webhook(
             Ok(Json(json!({ "status": "success", "data": message })))
         }
         "sms:sent" | "sms:delivered" | "sms:failed" => {
-            if let Some(message) = update_outgoing_message(&state, &webhook, raw).await? {
+            if let Some(message) = update_outgoing_message(&state, &webhook, &event_id, raw).await? {
                 let _ = state.realtime.send(RealtimeEvent::MessageUpdated(message.clone()));
                 Ok(Json(json!({ "status": "success", "data": message })))
             } else {
@@ -179,7 +179,15 @@ async fn store_received_message(
             device_id, sender, recipient, sim_number, received_at, raw_payload
          )
          VALUES ('received', 'Received', $1, $2, $3, $4, $5, $1, $6, $7, $8, $9)
-         ON CONFLICT (webhook_event_id) DO UPDATE SET
+         ON CONFLICT (message_id) WHERE direction = 'received' AND message_id IS NOT NULL DO UPDATE SET
+            webhook_event_id = EXCLUDED.webhook_event_id,
+            phone_number = EXCLUDED.phone_number,
+            message_content = EXCLUDED.message_content,
+            device_id = EXCLUDED.device_id,
+            sender = EXCLUDED.sender,
+            recipient = EXCLUDED.recipient,
+            sim_number = EXCLUDED.sim_number,
+            received_at = COALESCE(EXCLUDED.received_at, messages.received_at),
             raw_payload = EXCLUDED.raw_payload,
             updated_at = now()
          RETURNING *",
@@ -202,12 +210,9 @@ async fn store_received_message(
 async fn update_outgoing_message(
     state: &AppState,
     webhook: &SmsGateWebhook,
+    event_id: &str,
     raw: Value,
 ) -> AppResult<Option<Message>> {
-    let Some(message_id) = str_value(&webhook.payload, "messageId") else {
-        return Ok(None);
-    };
-
     let status = match webhook.event.as_str() {
         "sms:sent" => "Sent",
         "sms:delivered" => "Delivered",
@@ -215,19 +220,72 @@ async fn update_outgoing_message(
         _ => "Updated",
     };
 
+    let payload = &webhook.payload;
+    let message_id = str_value(payload, "messageId");
+    let event_at = ["sentAt", "deliveredAt", "failedAt"]
+        .iter()
+        .find_map(|key| str_value(payload, key))
+        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+        .map(|value| value.with_timezone(&Utc));
+
+    if let Some(message_id) = message_id.clone() {
+        if let Some(message) = sqlx::query_as::<_, Message>(
+            "UPDATE messages
+             SET status = $2,
+                 webhook_event_id = $3,
+                 raw_payload = $4,
+                 received_at = COALESCE($5, received_at),
+                 updated_at = now()
+             WHERE message_id = $1
+             RETURNING *",
+        )
+        .bind(&message_id)
+        .bind(status)
+        .bind(event_id)
+        .bind(raw.clone())
+        .bind(event_at)
+        .fetch_optional(&state.db)
+        .await?
+        {
+            return Ok(Some(message));
+        }
+    }
+
+    let recipient = str_value(payload, "recipient").or_else(|| str_value(payload, "phoneNumber"));
+    let sender = str_value(payload, "sender");
+    let text = str_value(payload, "message").unwrap_or_default();
+    let phone_number = recipient
+        .clone()
+        .or_else(|| sender.clone())
+        .unwrap_or_else(|| "Unknown".into());
+
     let message = sqlx::query_as::<_, Message>(
-        "UPDATE messages
-         SET status = $2, raw_payload = $3, updated_at = now()
-         WHERE message_id = $1
+        "INSERT INTO messages(
+            direction, status, phone_number, message_content, message_id, webhook_event_id,
+            device_id, sender, recipient, sim_number, received_at, raw_payload
+         )
+         VALUES ('sent', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ON CONFLICT (webhook_event_id) DO UPDATE SET
+            status = EXCLUDED.status,
+            raw_payload = EXCLUDED.raw_payload,
+            updated_at = now()
          RETURNING *",
     )
-    .bind(message_id)
     .bind(status)
+    .bind(phone_number)
+    .bind(text)
+    .bind(message_id)
+    .bind(event_id)
+    .bind(&webhook.device_id)
+    .bind(sender)
+    .bind(recipient)
+    .bind(payload.get("simNumber").and_then(Value::as_i64).map(|value| value as i32))
+    .bind(event_at)
     .bind(raw)
-    .fetch_optional(&state.db)
+    .fetch_one(&state.db)
     .await?;
 
-    Ok(message)
+    Ok(Some(message))
 }
 
 fn str_value(payload: &Value, key: &str) -> Option<String> {

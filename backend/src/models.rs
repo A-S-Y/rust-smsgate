@@ -39,6 +39,7 @@ pub struct SettingsResponse {
     pub username: Option<String>,
     pub device_id: Option<String>,
     pub webhook_public_url: Option<String>,
+    pub messages_retention_days: i64,
     pub has_password: bool,
     pub has_webhook_signing_key: bool,
 }
@@ -51,6 +52,7 @@ pub struct SettingsRequest {
     pub device_id: Option<String>,
     pub webhook_public_url: Option<String>,
     pub webhook_signing_key: Option<String>,
+    pub messages_retention_days: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

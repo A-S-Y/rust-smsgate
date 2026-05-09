@@ -22,7 +22,8 @@
 
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background:
     linear-gradient(135deg, rgba(15, 118, 110, 0.12), transparent 38%),
     linear-gradient(315deg, rgba(37, 99, 235, 0.1), transparent 35%),
@@ -99,9 +100,10 @@ input:focus, textarea:focus {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-columns: 290px 1fr;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -161,8 +163,11 @@ input:focus, textarea:focus {
 .content {
   padding: 1.5rem;
   display: grid;
+  grid-template-rows: auto auto 1fr;
   align-content: start;
   gap: 1.2rem;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .metric-grid {
@@ -316,7 +321,8 @@ input:focus, textarea:focus {
 }
 
 .conversation-shell {
-  min-height: min(760px, calc(100vh - 190px));
+  height: 100%;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(310px, 370px) minmax(0, 1fr);
   background: rgba(255, 255, 255, 0.9);
@@ -484,6 +490,7 @@ input:focus, textarea:focus {
 .thread-body {
   min-height: 0;
   overflow-y: auto;
+  scroll-behavior: smooth;
   padding: 1.1rem;
   display: flex;
   flex-direction: column;
@@ -575,6 +582,7 @@ input:focus, textarea:focus {
 @media (max-width: 860px) {
   .app-shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
 
   .sidebar {
@@ -599,7 +607,8 @@ input:focus, textarea:focus {
   }
 
   .conversation-shell {
-    min-height: calc(100vh - 290px);
+    height: 100%;
+    min-height: 0;
     grid-template-columns: 1fr;
   }
 

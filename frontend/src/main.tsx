@@ -26,16 +26,25 @@ function App() {
   }, []);
 
   if (!token) {
-    return <Login onLogin={(next) => {
-      localStorage.setItem(tokenKey, next);
-      setToken(next);
-    }} />;
+    return (
+      <Login
+        onLogin={(next) => {
+          localStorage.setItem(tokenKey, next);
+          setToken(next);
+        }}
+      />
+    );
   }
 
-  return <Dashboard token={token} onLogout={() => {
-    localStorage.removeItem(tokenKey);
-    setToken(null);
-  }} />;
+  return (
+    <Dashboard
+      token={token}
+      onLogout={() => {
+        localStorage.removeItem(tokenKey);
+        setToken(null);
+      }}
+    />
+  );
 }
 
 function Login({ onLogin }: { onLogin: (token: string) => void }) {
@@ -61,8 +70,14 @@ function Login({ onLogin }: { onLogin: (token: string) => void }) {
         <h1>Rust SMSGate</h1>
         <p>لوحة رسائل لحظية مبنية بـ Axum وPostgreSQL.</p>
         {error && <div className="alert danger">{error}</div>}
-        <label>اسم المستخدم<input value={username} onChange={(e) => setUsername(e.target.value)} /></label>
-        <label>كلمة المرور<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <label>
+          اسم المستخدم
+          <input value={username} onChange={(e) => setUsername(e.target.value)} />
+        </label>
+        <label>
+          كلمة المرور
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </label>
         <button>دخول</button>
       </form>
     </main>
@@ -75,14 +90,26 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
   const [connection, setConnection] = useState<"connecting" | "online" | "offline">("connecting");
   const [notice, setNotice] = useState<string | null>(null);
 
-  const stats = useMemo(() => ({
-    total: messages.length,
-    received: messages.filter((m) => m.direction === "received").length,
-    sent: messages.filter((m) => m.direction === "sent").length
-  }), [messages]);
+  const stats = useMemo(
+    () => ({
+      total: messages.length,
+      received: messages.filter((m) => m.direction === "received").length,
+      sent: messages.filter((m) => m.direction === "sent").length,
+    }),
+    [messages]
+  );
+
+  async function reloadMessages() {
+    const data = await api.messages(token);
+    setMessages(sortMessages(data));
+  }
+
+  function upsertMessage(message: MessageRecord) {
+    setMessages((prev) => sortMessages([message, ...prev.filter((item) => item.id !== message.id)]));
+  }
 
   useEffect(() => {
-    api.messages(token).then((data) => setMessages(sortMessages(data))).catch((err) => setNotice(err.message));
+    reloadMessages().catch((err) => setNotice(err.message));
   }, [token]);
 
   useEffect(() => {
@@ -105,7 +132,10 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           setMessages((prev) => sortMessages([realtime.payload, ...prev.filter((m) => m.id !== realtime.payload.id)]));
         }
         if (realtime.type === "message.updated") {
-          setMessages((prev) => sortMessages(prev.map((m) => (m.id === realtime.payload.id ? realtime.payload : m))));
+          setMessages((prev) => {
+            const exists = prev.some((m) => m.id === realtime.payload.id);
+            return sortMessages(exists ? prev.map((m) => (m.id === realtime.payload.id ? realtime.payload : m)) : [realtime.payload, ...prev]);
+          });
         }
       };
     };
@@ -124,12 +154,20 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
         <div>
           <div className="brand-mark small">SMS</div>
           <h2>بوابة الرسائل</h2>
-          <span className={`connection ${connection}`}>{connection === "online" ? "متصل لحظياً" : connection === "connecting" ? "جاري الاتصال" : "غير متصل"}</span>
+          <span className={`connection ${connection}`}>
+            {connection === "online" ? "متصل لحظياً" : connection === "connecting" ? "جاري الاتصال" : "غير متصل"}
+          </span>
         </div>
         <nav>
-          <button className={view === "messages" ? "active" : ""} onClick={() => setView("messages")}>المحادثات</button>
-          <button className={view === "send" ? "active" : ""} onClick={() => setView("send")}>إرسال</button>
-          <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>الإعدادات</button>
+          <button className={view === "messages" ? "active" : ""} onClick={() => setView("messages")}>
+            المحادثات
+          </button>
+          <button className={view === "send" ? "active" : ""} onClick={() => setView("send")}>
+            إرسال
+          </button>
+          <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>
+            الإعدادات
+          </button>
           <button onClick={onLogout}>خروج</button>
         </nav>
       </aside>
@@ -141,19 +179,34 @@ function Dashboard({ token, onLogout }: { token: string; onLogout: () => void })
           <Metric label="الوارد" value={stats.received} />
           <Metric label="الصادر" value={stats.sent} />
         </section>
-        {view === "messages" && <Conversations token={token} messages={messages} setNotice={setNotice} />}
-        {view === "send" && <Send token={token} setNotice={setNotice} />}
-        {view === "settings" && <Settings token={token} setNotice={setNotice} />}
+        {view === "messages" && <Conversations token={token} messages={messages} setNotice={setNotice} onMessageSaved={upsertMessage} />}
+        {view === "send" && <Send token={token} setNotice={setNotice} onMessageSaved={upsertMessage} />}
+        {view === "settings" && <Settings token={token} setNotice={setNotice} onSaved={reloadMessages} />}
       </main>
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
-  return <div className="metric"><span>{label}</span><strong>{value}</strong></div>;
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
 }
 
-function Conversations({ token, messages, setNotice }: { token: string; messages: MessageRecord[]; setNotice: (value: string | null) => void }) {
+function Conversations({
+  token,
+  messages,
+  setNotice,
+  onMessageSaved,
+}: {
+  token: string;
+  messages: MessageRecord[];
+  setNotice: (value: string | null) => void;
+  onMessageSaved: (message: MessageRecord) => void;
+}) {
   const conversations = useMemo(() => buildConversations(messages), [messages]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -181,10 +234,19 @@ function Conversations({ token, messages, setNotice }: { token: string; messages
           </div>
           <span className="live-dot">مباشر</span>
         </div>
-        <input className="conversation-search" placeholder="بحث بالرقم أو نص الرسالة" value={query} onChange={(event) => setQuery(event.target.value)} />
+        <input
+          className="conversation-search"
+          placeholder="بحث بالرقم أو نص الرسالة"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
         <div className="conversation-items">
           {filtered.map((conversation) => (
-            <button key={conversation.id} className={`conversation-item ${selected?.id === conversation.id ? "active" : ""}`} onClick={() => setSelectedId(conversation.id)}>
+            <button
+              key={conversation.id}
+              className={`conversation-item ${selected?.id === conversation.id ? "active" : ""}`}
+              onClick={() => setSelectedId(conversation.id)}
+            >
               <Avatar value={conversation.title} />
               <div className="conversation-summary">
                 <div>
@@ -200,19 +262,35 @@ function Conversations({ token, messages, setNotice }: { token: string; messages
         </div>
       </aside>
 
-      <ConversationThread token={token} conversation={selected} setNotice={setNotice} />
+      <ConversationThread token={token} conversation={selected} setNotice={setNotice} onMessageSaved={onMessageSaved} />
     </section>
   );
 }
 
-function ConversationThread({ token, conversation, setNotice }: { token: string; conversation: Conversation | null; setNotice: (value: string | null) => void }) {
+function ConversationThread({
+  token,
+  conversation,
+  setNotice,
+  onMessageSaved,
+}: {
+  token: string;
+  conversation: Conversation | null;
+  setNotice: (value: string | null) => void;
+  onMessageSaved: (message: MessageRecord) => void;
+}) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+    });
+  }, [conversation?.id]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [conversation?.id, conversation?.messages.length]);
+  }, [conversation?.messages.length]);
 
   if (!conversation) {
     return <div className="thread empty-thread"><div className="empty">اختر محادثة لعرض الرسائل والرد عليها.</div></div>;
@@ -227,6 +305,7 @@ function ConversationThread({ token, conversation, setNotice }: { token: string;
     setNotice(null);
     try {
       const res = await api.sendMessage(token, conversation.phone, message);
+      onMessageSaved(res.data);
       setNotice(res.message);
       setText("");
     } catch (err) {
@@ -296,13 +375,22 @@ function Avatar({ value }: { value: string }) {
   return <span className="avatar">{label}</span>;
 }
 
-function Send({ token, setNotice }: { token: string; setNotice: (value: string | null) => void }) {
+function Send({
+  token,
+  setNotice,
+  onMessageSaved,
+}: {
+  token: string;
+  setNotice: (value: string | null) => void;
+  onMessageSaved: (message: MessageRecord) => void;
+}) {
   const [phone, setPhone] = useState("");
   const [text, setText] = useState("");
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     const res = await api.sendMessage(token, phone, text);
+    onMessageSaved(res.data);
     setNotice(res.message);
     setPhone("");
     setText("");
@@ -320,12 +408,20 @@ function Send({ token, setNotice }: { token: string; setNotice: (value: string |
   );
 }
 
-function Settings({ token, setNotice }: { token: string; setNotice: (value: string | null) => void }) {
+function Settings({
+  token,
+  setNotice,
+  onSaved,
+}: {
+  token: string;
+  setNotice: (value: string | null) => void;
+  onSaved: () => Promise<void>;
+}) {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [form, setForm] = useState<Record<string, string>>({});
   const [range, setRange] = useState(() => ({
     since: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    until: new Date().toISOString()
+    until: new Date().toISOString(),
   }));
 
   useEffect(() => {
@@ -335,7 +431,8 @@ function Settings({ token, setNotice }: { token: string; setNotice: (value: stri
         server_url: data.server_url || "https://api.sms-gate.app",
         username: data.username || "",
         device_id: data.device_id || "",
-        webhook_public_url: data.webhook_public_url || ""
+        webhook_public_url: data.webhook_public_url || "",
+        messages_retention_days: String(data.messages_retention_days || 30),
       });
     });
   }, [token]);
@@ -344,6 +441,7 @@ function Settings({ token, setNotice }: { token: string; setNotice: (value: stri
     event.preventDefault();
     const res = await api.saveSettings(token, form);
     setNotice(res.message);
+    await onSaved();
   }
 
   async function registerWebhook() {
@@ -361,11 +459,13 @@ function Settings({ token, setNotice }: { token: string; setNotice: (value: stri
       <h1>الإعدادات</h1>
       {settings && <p>كلمة مرور SMS Gate: {settings.has_password ? "مخزنة" : "غير مخزنة"} | Signing Key: {settings.has_webhook_signing_key ? "مخزن" : "غير مخزن"}</p>}
       <form className="form" onSubmit={save}>
-        {["server_url", "username", "password", "device_id", "webhook_public_url", "webhook_signing_key"].map((key) => (
+        {["server_url", "username", "password", "device_id", "webhook_public_url", "webhook_signing_key", "messages_retention_days"].map((key) => (
           <label key={key}>{labelFor(key)}
             <input
               dir="ltr"
-              type={key.includes("password") || key.includes("key") ? "password" : "text"}
+              type={key.includes("password") || key.includes("key") ? "password" : key === "messages_retention_days" ? "number" : "text"}
+              min={key === "messages_retention_days" ? 1 : undefined}
+              max={key === "messages_retention_days" ? 3650 : undefined}
               value={form[key] || ""}
               onChange={(e) => setForm((prev) => ({ ...prev, [key]: e.target.value }))}
             />
@@ -456,7 +556,8 @@ function labelFor(key: string) {
     password: "كلمة المرور",
     device_id: "معرف الجهاز",
     webhook_public_url: "رابط HTTPS العام",
-    webhook_signing_key: "Webhook Signing Key"
+    webhook_signing_key: "Webhook Signing Key",
+    messages_retention_days: "عرض رسائل آخر عدد أيام",
   } as Record<string, string>)[key];
 }
 

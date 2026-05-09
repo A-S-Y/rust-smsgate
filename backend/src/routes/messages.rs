@@ -1,5 +1,5 @@
 use axum::{extract::{Query, State}, http::HeaderMap, Json};
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 
 use crate::{
@@ -21,18 +21,27 @@ pub async fn list_messages(
 
     let limit = query.limit.unwrap_or(200).clamp(1, 500);
     let offset = query.offset.unwrap_or(0).max(0);
+    let crypto = CryptoBox::new(&state.config.settings_encryption_key);
+    let retention_days = get_setting(&state, &crypto, "messages_retention_days")
+        .await?
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(30)
+        .clamp(1, 3650);
+    let from = Utc::now() - Duration::days(retention_days);
 
     let messages = sqlx::query_as::<_, Message>(
         "SELECT * FROM messages
          WHERE ($1::text IS NULL OR direction = $1)
            AND ($2::text IS NULL OR status = $2)
            AND ($3::text IS NULL OR device_id = $3)
+           AND COALESCE(received_at, created_at) >= $4
          ORDER BY COALESCE(received_at, created_at) DESC
-         LIMIT $4 OFFSET $5",
+         LIMIT $5 OFFSET $6",
     )
     .bind(query.direction)
     .bind(query.status)
     .bind(query.device_id)
+    .bind(from)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)

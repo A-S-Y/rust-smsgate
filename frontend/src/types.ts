@@ -20,6 +20,7 @@ export interface SettingsResponse {
   username?: string | null;
   device_id?: string | null;
   webhook_public_url?: string | null;
+  messages_retention_days: number;
   has_password: boolean;
   has_webhook_signing_key: boolean;
 }

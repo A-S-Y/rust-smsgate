@@ -1,4 +1,4 @@
-import type { SettingsResponse } from "./types";
+import type { MessageRecord, SettingsResponse } from "./types";
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL || "/api";
 
@@ -30,14 +30,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password })
     }),
-  messages: (token: string) => request<import("./types").MessageRecord[]>("/messages?limit=250", token),
+  messages: (token: string) => request<MessageRecord[]>("/messages?limit=500", token),
   settings: (token: string) => request<SettingsResponse>("/settings", token),
   saveSettings: (token: string, payload: Record<string, string>) =>
-    request<{ message: string }>("/settings", token, { method: "POST", body: JSON.stringify(payload) }),
+    request<{ message: string }>("/settings", token, {
+      method: "POST",
+      body: JSON.stringify({
+        ...payload,
+        messages_retention_days: Number(payload.messages_retention_days || 30)
+      })
+    }),
   registerWebhook: (token: string) =>
     request<{ message: string; webhook_url: string }>("/webhooks/smsgate/register", token, { method: "POST" }),
   sendMessage: (token: string, phone_number: string, message_content: string) =>
-    request<{ message: string }>("/messages/send", token, {
+    request<{ message: string; data: MessageRecord }>("/messages/send", token, {
       method: "POST",
       body: JSON.stringify({ phone_number, message_content })
     }),

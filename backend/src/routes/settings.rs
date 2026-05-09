@@ -18,6 +18,10 @@ pub async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> 
         username: get_setting(&state, &crypto, "username").await?,
         device_id: get_setting(&state, &crypto, "device_id").await?,
         webhook_public_url: get_setting(&state, &crypto, "webhook_public_url").await?,
+        messages_retention_days: get_setting(&state, &crypto, "messages_retention_days")
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or(30),
         has_password: get_setting(&state, &crypto, "password").await?.is_some(),
         has_webhook_signing_key: get_setting(&state, &crypto, "webhook_signing_key").await?.is_some(),
     };
@@ -37,6 +41,12 @@ pub async fn save_settings(
     save_plain(&state, "username", input.username).await?;
     save_plain(&state, "device_id", input.device_id).await?;
     save_plain(&state, "webhook_public_url", input.webhook_public_url).await?;
+    save_plain(
+        &state,
+        "messages_retention_days",
+        input.messages_retention_days.map(|days| days.clamp(1, 3650).to_string()),
+    )
+    .await?;
     save_secret(&state, &crypto, "password", input.password).await?;
     save_secret(&state, &crypto, "webhook_signing_key", input.webhook_signing_key).await?;
 
