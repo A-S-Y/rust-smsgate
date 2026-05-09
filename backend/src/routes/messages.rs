@@ -57,7 +57,8 @@ pub async fn send_message(
     Json(input): Json<SendMessageRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     let actor = require_auth(&headers, &state.config)?;
-    let sms = sms_settings(&state).await?;
+    let crypto = CryptoBox::new(&state.config.settings_encryption_key);
+    let device_id = get_setting(&state, &crypto, "device_id").await?;
 
     let message = sqlx::query_as::<_, Message>(
         "INSERT INTO messages(direction, status, phone_number, message_content, recipient, device_id)
@@ -66,7 +67,7 @@ pub async fn send_message(
     )
     .bind(&input.phone_number)
     .bind(&input.message_content)
-    .bind(&sms.device_id)
+    .bind(&device_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -98,7 +99,30 @@ async fn deliver_outgoing_message(
     message_id: Uuid,
     input: SendMessageRequest,
 ) -> AppResult<()> {
-    let sms = sms_settings(&state).await?;
+    let sms = match sms_settings(&state).await {
+        Ok(sms) => sms,
+        Err(error) => {
+            let failed = mark_message_failed(
+                &state,
+                message_id,
+                json!({ "error": error.to_string(), "stage": "settings" }),
+            )
+            .await?;
+            sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
+                .bind("system")
+                .bind("messages.send.failed")
+                .bind(json!({
+                    "message_id": failed.id,
+                    "phone_number": failed.phone_number.clone(),
+                    "error": error.to_string(),
+                    "stage": "settings"
+                }))
+                .execute(&state.db)
+                .await?;
+            let _ = state.realtime.send(RealtimeEvent::MessageUpdated(failed));
+            return Err(error);
+        }
+    };
     let mut body = json!({
         "textMessage": { "text": input.message_content },
         "phoneNumbers": [input.phone_number],

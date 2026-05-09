@@ -391,12 +391,16 @@ function Send({
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    const res = await api.sendMessage(token, phone, text);
-    onMessageSaved(res.data);
-    setNotice(res.message);
-    setPhone("");
-    setText("");
-    onSent();
+    try {
+      const res = await api.sendMessage(token, phone, text);
+      onMessageSaved(res.data);
+      setNotice(res.message);
+      setPhone("");
+      setText("");
+      onSent();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "فشل إنشاء الرسالة الصادرة");
+    }
   }
 
   return (
