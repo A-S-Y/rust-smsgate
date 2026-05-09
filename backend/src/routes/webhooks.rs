@@ -83,28 +83,37 @@ pub async fn register_webhook(
         ));
     }
 
-    let mut payload = json!({
-        "id": "smsgate-received",
-        "event": "sms:received",
-        "url": webhook_url,
-    });
+    let events = ["sms:received", "sms:sent", "sms:delivered", "sms:failed"];
+    let mut registered = Vec::new();
 
-    if let Some(device_id) = sms.device_id {
-        payload["deviceId"] = json!(device_id);
-    }
+    for event in events {
+        let mut payload = json!({
+            "id": format!("smsgate-{}", event.replace(':', "-")),
+            "event": event,
+            "url": webhook_url,
+        });
 
-    let res = state
-        .http
-        .post(format!("{}/3rdparty/v1/webhooks", sms.server_url.trim_end_matches('/')))
-        .basic_auth(sms.username, Some(sms.password))
-        .json(&payload)
-        .send()
-        .await?;
+        if let Some(device_id) = &sms.device_id {
+            payload["deviceId"] = json!(device_id);
+        }
 
-    let status = res.status();
-    let body: Value = res.json().await.unwrap_or_else(|_| json!({}));
-    if !status.is_success() {
-        return Err(AppError::Upstream(format!("SMSGate webhook registration failed with status {status}")));
+        let res = state
+            .http
+            .post(format!("{}/3rdparty/v1/webhooks", sms.server_url.trim_end_matches('/')))
+            .basic_auth(&sms.username, Some(&sms.password))
+            .json(&payload)
+            .send()
+            .await?;
+
+        let status = res.status();
+        let body: Value = res.json().await.unwrap_or_else(|_| json!({}));
+        if !status.is_success() {
+            return Err(AppError::Upstream(format!(
+                "SMSGate webhook registration failed for {event} with status {status}"
+            )));
+        }
+
+        registered.push(json!({ "event": event, "response": body }));
     }
 
     sqlx::query("INSERT INTO audit_logs(actor, action, metadata) VALUES ($1, $2, $3)")
@@ -115,9 +124,9 @@ pub async fn register_webhook(
         .await?;
 
     Ok(Json(json!({
-        "message": "Webhook registered successfully.",
-        "webhook_url": payload["url"],
-        "data": body,
+        "message": "Webhooks registered successfully.",
+        "webhook_url": webhook_url,
+        "data": registered,
     })))
 }
 

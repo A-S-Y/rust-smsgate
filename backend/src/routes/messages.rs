@@ -60,6 +60,8 @@ pub async fn send_message(
     .fetch_one(&state.db)
     .await?;
 
+    let _ = state.realtime.send(RealtimeEvent::MessageCreated(message.clone()));
+
     let mut body = json!({
         "textMessage": { "text": input.message_content },
         "phoneNumbers": [input.phone_number],
@@ -79,7 +81,8 @@ pub async fn send_message(
     let status = res.status();
     let upstream: Value = res.json().await.unwrap_or_else(|_| json!({}));
     if !status.is_success() {
-        mark_message_failed(&state, message.id, upstream.clone()).await?;
+        let failed = mark_message_failed(&state, message.id, upstream.clone()).await?;
+        let _ = state.realtime.send(RealtimeEvent::MessageUpdated(failed.clone()));
         return Err(AppError::Upstream(format!("SMSGate send failed with status {status}")));
     }
 
@@ -101,7 +104,7 @@ pub async fn send_message(
     .fetch_one(&state.db)
     .await?;
 
-    let _ = state.realtime.send(RealtimeEvent::MessageCreated(updated.clone()));
+    let _ = state.realtime.send(RealtimeEvent::MessageUpdated(updated.clone()));
     Ok(Json(json!({ "message": "Message queued successfully.", "data": updated })))
 }
 
@@ -171,11 +174,16 @@ pub async fn sms_settings(state: &AppState) -> AppResult<SmsSettings> {
     })
 }
 
-async fn mark_message_failed(state: &AppState, id: uuid::Uuid, raw_payload: Value) -> AppResult<()> {
-    sqlx::query("UPDATE messages SET status = 'Failed', raw_payload = $2, updated_at = now() WHERE id = $1")
+async fn mark_message_failed(state: &AppState, id: uuid::Uuid, raw_payload: Value) -> AppResult<Message> {
+    let message = sqlx::query_as::<_, Message>(
+        "UPDATE messages
+         SET status = 'Failed', raw_payload = $2, updated_at = now()
+         WHERE id = $1
+         RETURNING *",
+    )
         .bind(id)
         .bind(raw_payload)
-        .execute(&state.db)
+        .fetch_one(&state.db)
         .await?;
-    Ok(())
+    Ok(message)
 }
