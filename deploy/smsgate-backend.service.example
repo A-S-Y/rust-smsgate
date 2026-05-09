@@ -1,0 +1,15 @@
+[Unit]
+Description=Rust SMSGate Axum Backend
+After=network.target postgresql.service
+
+[Service]
+WorkingDirectory=/opt/rust-smsgate/backend
+EnvironmentFile=/opt/rust-smsgate/.env
+ExecStart=/opt/rust-smsgate/backend/smsgate-backend
+Restart=always
+RestartSec=5
+User=www-data
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target
